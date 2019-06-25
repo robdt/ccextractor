@@ -10,6 +10,7 @@ Vagrant.configure(2) do |config|
     sudo apt-get install -y tesseract-ocr
     sudo apt-get install -y tesseract-ocr-dev
     sudo apt-get install -y libleptonica-dev
+    sudo apt-get install -y uuid-dev
   SHELL
 
 end

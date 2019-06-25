@@ -85,11 +85,16 @@ then
     echo "Error: please install leptonica development library (libleptonica-dev for Debian/Ubuntu)";
     exit 4
 fi
+if [[ $out == *"uuid/uuid.h: No such file or directory"* ]]
+then
+    echo "Error: please install uuid development library (uuid-dev for Debian/Ubuntu)";
+    exit 5
+fi
 if [[ $res -ne 0 ]]  # Unknown error
 then
     echo "Compiled with errors"
     >&2 echo "$out"
-    exit 5
+    exit 6
 fi
 if [[ "$out" != "" ]] ; then
     echo "$out"
