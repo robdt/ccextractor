@@ -99,6 +99,7 @@
     <ClInclude Include="..\src\lib_ccx\lib_ccx.h" />
     <ClInclude Include="..\src\lib_ccx\teletext.h" />
     <ClInclude Include="..\src\lib_ccx\utility.h" />
+    <ClInclude Include="..\src\lib_ccx\win_uuid.h" />
     <ClInclude Include="..\src\lib_hash\sha2.h" />
     <ClInclude Include="..\src\microutf8\microutf8.h" />
     <ClInclude Include="..\src\protobuf-c\protobuf-c.h" />
@@ -270,6 +271,7 @@
     <ClCompile Include="..\src\lib_ccx\ts_tables.c" />
     <ClCompile Include="..\src\lib_ccx\ts_tables_epg.c" />
     <ClCompile Include="..\src\lib_ccx\utility.c" />
+    <ClCompile Include="..\src\lib_ccx\win_uuid.cpp" />
     <ClCompile Include="..\src\lib_ccx\wtv_functions.c" />
     <ClCompile Include="..\src\lib_hash\sha2.c" />
     <ClCompile Include="..\src\protobuf-c\protobuf-c.c" />

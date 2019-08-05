@@ -1,7 +1,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#ifdef _WIN32
+#include "win_uuid.h"
+#else
 #include <uuid/uuid.h>
+#endif
 #include <stdarg.h>
 
 #include "ccx_encoders_mcc.h"
