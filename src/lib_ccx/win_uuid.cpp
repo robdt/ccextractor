@@ -20,6 +20,8 @@
 // SOFTWARE.
 //-----------------------------------------------------------------------------
 
+#ifdef _WIN32
+
 #include "stdafx.h"
 #include "win_uuid.h"
 
@@ -65,4 +67,4 @@ void uuid_unparse_upper(uuid_t const& u, char* out)
 
 #pragma warning(pop)
 
-
+#endif
