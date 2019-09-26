@@ -19,7 +19,9 @@ static const char* MonthStr[12] = { "January", "February", "March", "April",
 static const char* DayOfWeekStr[7] = { "Sunday", "Monday", "Tuesday", "Wednesday",
                                        "Thursday", "Friday", "Saturday" };
 
+#if 0
 static const uint32 framerate_translation[16] = { 0, 2397, 2400, 2500, 2997, 3000, 5000, 5994, 6000, 0, 0, 0, 0, 0 };
+#endif
 
 static void debug_log( char* file, int line, ... );
 static ccx_mcc_caption_time convert_to_caption_time( LLONG mstime );
@@ -55,11 +57,12 @@ boolean mcc_encode_cc_data( struct encoder_ctx *enc_ctx, struct lib_cc_decode *d
         enc_ctx->next_caption_time.hour = caption_time.hour;
         enc_ctx->next_caption_time.minute = caption_time.minute;
         enc_ctx->next_caption_time.second = caption_time.second;
-        uint64 frame_number = caption_time.millisecond * framerate_translation[dec_ctx->current_frame_rate];
+        uint32 norm_frame_rate = (uint32)(current_fps * 100);
+        uint64 frame_number = caption_time.millisecond * norm_frame_rate;
         frame_number = frame_number / 100000;
-        if( frame_number > (framerate_translation[dec_ctx->current_frame_rate] / 100) ) {
-            LOG("WARN: Normalized Frame Number %d to %d", frame_number, (framerate_translation[dec_ctx->current_frame_rate] / 100));
-            frame_number = framerate_translation[dec_ctx->current_frame_rate] / 100;
+        if( frame_number > (norm_frame_rate / 100) ) {
+            LOG("WARN: Normalized Frame Number %d to %d", frame_number, (norm_frame_rate / 100));
+            frame_number = norm_frame_rate / 100;
         }
         enc_ctx->next_caption_time.frame = frame_number;
         LOG("Captions start at: %02d:%02d:%02d:%02d / %02d:%02d:%02d,%03d",
@@ -138,6 +141,29 @@ static void generate_mcc_header( int fh, int fr_code, int dropframe_flag ) {
     sprintf(date_str, "Creation Date=%s, %s %d, %d\n", DayOfWeekStr[tm.tm_wday], MonthStr[tm.tm_mon], tm.tm_mday, tm.tm_year + 1900);
     sprintf(time_str, "Creation Time=%d:%02d:%02d\n", tm.tm_hour, tm.tm_min, tm.tm_sec);
 
+#if 1
+    if((current_fps > 22) && (current_fps < 25)) {
+        sprintf(tcr_str, "Time Code Rate=24\n\n");
+    } else if((current_fps > 24) && (current_fps < 29)) {
+        sprintf(tcr_str, "Time Code Rate=25\n\n");
+    } else if((current_fps > 28) && (current_fps < 31)) {
+        if (dropframe_flag == CCX_TRUE) {
+            sprintf(tcr_str, "Time Code Rate=30DF\n\n");
+        } else {
+            sprintf(tcr_str, "Time Code Rate=30\n\n");
+        }
+    } else if((current_fps > 49) && (current_fps < 51)) {
+        sprintf(tcr_str, "Time Code Rate=50\n\n");
+    } else if((current_fps > 59) && (current_fps < 61)) {
+        if (dropframe_flag == CCX_TRUE) {
+            sprintf(tcr_str, "Time Code Rate=60DF\n\n");
+        } else {
+            sprintf(tcr_str, "Time Code Rate=60\n\n");
+        }
+    } else {
+        LOG("ERROR: Invalid Framerate Code: %f", current_fps);
+    }
+#else
     switch( fr_code ) {
         case 1:
         case 2:
@@ -169,6 +195,7 @@ static void generate_mcc_header( int fh, int fr_code, int dropframe_flag ) {
             LOG("ERROR: Invalid Framerate Code: %d", fr_code);
             break;
     }
+#endif
 
     write_string(fh, "File Format=MacCaption_MCC V1.0\n\n");
     write_string(fh, "///////////////////////////////////////////////////////////////////////////////////\n");
@@ -223,8 +250,9 @@ static void ms_to_frame( struct encoder_ctx *ctx, ccx_mcc_caption_time* caption_
 
     ctx->next_caption_time.frame = ctx->next_caption_time.frame + 1;
 
-    uint8 frame_roll_over = framerate_translation[fr_code] / 100;
-    if ((framerate_translation[fr_code] % 100) > 75) frame_roll_over++;
+    uint32 norm_frame_rate = (uint32)(current_fps * 100);
+    uint8 frame_roll_over = norm_frame_rate / 100;
+    if ((norm_frame_rate % 100) > 75) frame_roll_over++;
 
     if (ctx->next_caption_time.frame >= frame_roll_over) {
         ctx->next_caption_time.frame = 0;
@@ -247,7 +275,7 @@ static void ms_to_frame( struct encoder_ctx *ctx, ccx_mcc_caption_time* caption_
     }
 
     int64 frame_time_in_ms = (((caption_time_ptr->hour * 3600) + (caption_time_ptr->minute * 60) + (caption_time_ptr->second)) * 1000) +
-                               ((caption_time_ptr->frame * 100000) / framerate_translation[fr_code]);
+                               ((caption_time_ptr->frame * 100000) / norm_frame_rate);
 
     int64 delta_in_ms;
 
@@ -259,7 +287,7 @@ static void ms_to_frame( struct encoder_ctx *ctx, ccx_mcc_caption_time* caption_
 
     if( delta_in_ms > 1000 ) {
         LOG("ERROR: Larger than expected delta in Caption Time Conversion: %lld, DF%d, %dfps",
-            delta_in_ms, dropframe_flag, framerate_translation[fr_code]);
+            delta_in_ms, dropframe_flag, norm_frame_rate);
     }
 }  // ms_to_frame()
 
@@ -271,6 +299,27 @@ static uint8* add_boilerplate( struct encoder_ctx *ctx, unsigned char *cc_data, 
     uint8* buff_ptr = malloc(data_size + 16);
     uint8 cdp_frame_rate = CDP_FRAME_RATE_FORBIDDEN;
 
+#if 1
+    if((current_fps > 22) && (current_fps < 24)) {
+        cdp_frame_rate = CDP_FRAME_RATE_23_976;
+    } else if((current_fps > 23) && (current_fps < 25)) {
+        cdp_frame_rate = CDP_FRAME_RATE_24;
+    } else if((current_fps > 24) && (current_fps < 26)) {
+        cdp_frame_rate = CDP_FRAME_RATE_25;
+    } else if((current_fps > 29) && (current_fps < 30)) {
+        cdp_frame_rate = CDP_FRAME_RATE_29_97;
+    } else if((current_fps > 29) && (current_fps < 31)) {
+        cdp_frame_rate = CDP_FRAME_RATE_30;
+    } else if((current_fps > 49) && (current_fps < 51)) {
+        cdp_frame_rate = CDP_FRAME_RATE_50;
+    } else if((current_fps > 58) && (current_fps < 60)) {
+        cdp_frame_rate = CDP_FRAME_RATE_59_94;
+    } else if((current_fps > 59) && (current_fps < 61)) {
+        cdp_frame_rate = CDP_FRAME_RATE_60;
+    } else {
+        LOG("ERROR: Invalid Framerate Code: %f", current_fps);
+    }
+#else
     switch( fr_code ) {
         case 1:
             cdp_frame_rate = CDP_FRAME_RATE_23_976;
@@ -300,7 +349,7 @@ static uint8* add_boilerplate( struct encoder_ctx *ctx, unsigned char *cc_data, 
             LOG("ERROR: Unknown Framerate: %d", fr_code);
             break;
     }
-
+#endif
     //   This function encodes the Ancillary Data (ANC) Packet, which wraps the Caption
     //   Distribution Packet (CDP), including the Closed Captioning Data (ccdata_section) as
     //   described in the CEA-708 Spec. Below is the list of specs that were leveraged for
