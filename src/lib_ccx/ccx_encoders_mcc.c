@@ -26,7 +26,8 @@ static const uint32 framerate_translation[16] = { 0, 2397, 2400, 2500, 2997, 300
 static void debug_log( char* file, int line, ... );
 static ccx_mcc_caption_time convert_to_caption_time( LLONG mstime );
 static void generate_mcc_header( int fh, int fr_code, int dropframe_flag );
-static void ms_to_frame( struct encoder_ctx *ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag );
+static void add_fill_packet( struct encoder_ctx *ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int cc_count );
+static void ms_to_frame( struct encoder_ctx *ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag, int cc_count );
 static uint8* add_boilerplate( struct encoder_ctx *ctx, unsigned char *cc_data, int cc_count, int fr_code );
 static uint16 count_compressed_chars( uint8* data_ptr, uint16 num_elements );
 static void compress_data( uint8* data_ptr, uint16 num_elements, uint8* out_data_ptr );
@@ -90,7 +91,7 @@ boolean mcc_encode_cc_data( struct encoder_ctx *enc_ctx, struct lib_cc_decode *d
     uint8* w_boilerplate_buffer = add_boilerplate(enc_ctx, cc_data, cc_count, dec_ctx->current_frame_rate);
     uint16 w_boilerplate_buff_size = ((cc_count * 3) + 16);
 
-    ms_to_frame(enc_ctx, &caption_time, dec_ctx->current_frame_rate, enc_ctx->force_dropframe);
+    ms_to_frame(enc_ctx, dec_ctx, &caption_time, dec_ctx->current_frame_rate, enc_ctx->force_dropframe, cc_count);
 
     uint16 num_chars_needed = count_compressed_chars(w_boilerplate_buffer, w_boilerplate_buff_size);
 
@@ -238,56 +239,97 @@ static void generate_mcc_header( int fh, int fr_code, int dropframe_flag ) {
     write_string(fh, tcr_str);
 } // generate_mcc_header()
 
-static void ms_to_frame( struct encoder_ctx *ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag ) {
+static void add_fill_packet( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int cc_count ) {
+
+    unsigned char *cc_data = malloc(cc_count * 3);
+
+    cc_data[0] = 0xFC;
+    cc_data[1] = 0x80;
+    cc_data[2] = 0x80;
+    cc_data[3] = 0xFD;
+    cc_data[4] = 0x80;
+    cc_data[5] = 0x80;
+    uint8* tmp_ptr = &cc_data[6];
+    for( int loop = 2; loop < cc_count; loop++ ) {
+        tmp_ptr[0] = 0xFA;
+        tmp_ptr[1] = 0x00;
+        tmp_ptr[2] = 0x00;
+        tmp_ptr = &tmp_ptr[3];
+    }
+
+    uint8* w_boilerplate_buffer = add_boilerplate(enc_ctx, cc_data, cc_count, dec_ctx->current_frame_rate);
+    uint16 w_boilerplate_buff_size = ((cc_count * 3) + 16);
+
+    uint16 num_chars_needed = count_compressed_chars(w_boilerplate_buffer, w_boilerplate_buff_size);
+
+    char* compressed_data_buffer = malloc(num_chars_needed + 13);
+
+    sprintf(compressed_data_buffer, "%02d:%02d:%02d:%02d\t", caption_time_ptr->hour, caption_time_ptr->minute,
+            caption_time_ptr->second, caption_time_ptr->frame );
+
+    compress_data(w_boilerplate_buffer, w_boilerplate_buff_size, (uint8*)&compressed_data_buffer[12]);
+    free(w_boilerplate_buffer);
+
+    strcat(compressed_data_buffer, "\n");
+
+    write(enc_ctx->out->fh, compressed_data_buffer, strlen(compressed_data_buffer));
+
+    free(compressed_data_buffer);
+} // add_fill_packet()
+
+static void ms_to_frame( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag, int cc_count ) {
+    boolean time_synch = CCX_FALSE;
+    int64 frame_size_ms = (1000 / current_fps) + 1;
+
     int64 actual_time_in_ms = (((caption_time_ptr->hour * 3600) + (caption_time_ptr->minute * 60) +
                                 (caption_time_ptr->second)) * 1000) + caption_time_ptr->millisecond;
 
-    caption_time_ptr->hour = ctx->next_caption_time.hour;
-    caption_time_ptr->minute = ctx->next_caption_time.minute;
-    caption_time_ptr->second = ctx->next_caption_time.second;
-    caption_time_ptr->frame = ctx->next_caption_time.frame;
-    caption_time_ptr->millisecond = 0;
+    while( time_synch == CCX_FALSE ) {
+        caption_time_ptr->hour = enc_ctx->next_caption_time.hour;
+        caption_time_ptr->minute = enc_ctx->next_caption_time.minute;
+        caption_time_ptr->second = enc_ctx->next_caption_time.second;
+        caption_time_ptr->frame = enc_ctx->next_caption_time.frame;
+        caption_time_ptr->millisecond = 0;
 
-    ctx->next_caption_time.frame = ctx->next_caption_time.frame + 1;
+        enc_ctx->next_caption_time.frame = enc_ctx->next_caption_time.frame + 1;
 
-    uint32 norm_frame_rate = (uint32)(current_fps * 100);
-    uint8 frame_roll_over = norm_frame_rate / 100;
-    if ((norm_frame_rate % 100) > 75) frame_roll_over++;
+        uint32 norm_frame_rate = (uint32)(current_fps * 100);
+        uint8 frame_roll_over = norm_frame_rate / 100;
+        if ((norm_frame_rate % 100) > 75) frame_roll_over++;
 
-    if (ctx->next_caption_time.frame >= frame_roll_over) {
-        ctx->next_caption_time.frame = 0;
-        ctx->next_caption_time.second = ctx->next_caption_time.second + 1;
-    }
+        if (enc_ctx->next_caption_time.frame >= frame_roll_over) {
+            enc_ctx->next_caption_time.frame = 0;
+            enc_ctx->next_caption_time.second = enc_ctx->next_caption_time.second + 1;
+        }
 
-    if( (dropframe_flag == CCX_TRUE) && (ctx->next_caption_time.second == 0) &&
-        (ctx->next_caption_time.frame == 0) && ((ctx->next_caption_time.minute % 10) != 0) ){
-        ctx->next_caption_time.frame = 2;
-    }
+        if (enc_ctx->next_caption_time.second >= 60) {
+            enc_ctx->next_caption_time.second = 0;
+            enc_ctx->next_caption_time.minute = enc_ctx->next_caption_time.minute + 1;
+        }
 
-    if (ctx->next_caption_time.second >= 60) {
-        ctx->next_caption_time.second = 0;
-        ctx->next_caption_time.minute = ctx->next_caption_time.minute + 1;
-    }
+        if (enc_ctx->next_caption_time.minute >= 60) {
+            enc_ctx->next_caption_time.minute = 0;
+            enc_ctx->next_caption_time.hour = enc_ctx->next_caption_time.hour + 1;
+        }
 
-    if (ctx->next_caption_time.minute >= 60) {
-        ctx->next_caption_time.minute = 0;
-        ctx->next_caption_time.hour = ctx->next_caption_time.hour + 1;
-    }
+        if (enc_ctx->next_caption_time.frame >= frame_roll_over) {
+            enc_ctx->next_caption_time.frame = 0;
+            enc_ctx->next_caption_time.second = enc_ctx->next_caption_time.second + 1;
+        }
 
-    int64 frame_time_in_ms = (((caption_time_ptr->hour * 3600) + (caption_time_ptr->minute * 60) + (caption_time_ptr->second)) * 1000) +
-                               ((caption_time_ptr->frame * 100000) / norm_frame_rate);
+        int64 frame_time_in_ms = (((caption_time_ptr->hour * 3600) + (caption_time_ptr->minute * 60) + (caption_time_ptr->second)) * 1000) +
+                                 ((caption_time_ptr->frame * 100000) / norm_frame_rate);
 
-    int64 delta_in_ms;
+        int64 delta_in_ms = actual_time_in_ms - frame_time_in_ms;
 
-    if( actual_time_in_ms > frame_time_in_ms ) {
-        delta_in_ms = actual_time_in_ms - frame_time_in_ms;
-    } else {
-        delta_in_ms = frame_time_in_ms - actual_time_in_ms;
-    }
-
-    if( delta_in_ms > 1000 ) {
-        LOG("ERROR: Larger than expected delta in Caption Time Conversion: %lld, DF%d, %dfps",
-            delta_in_ms, dropframe_flag, norm_frame_rate);
+        if( delta_in_ms > frame_size_ms ) {
+            add_fill_packet( enc_ctx, dec_ctx, caption_time_ptr, cc_count );
+        } else if( delta_in_ms < -frame_size_ms ) {
+            LOG("Code Missing to remove Fill Frame! Time will be skewed: %lld", delta_in_ms);
+            time_synch = CCX_TRUE;
+        } else {
+            time_synch = CCX_TRUE;
+        }
     }
 }  // ms_to_frame()
 

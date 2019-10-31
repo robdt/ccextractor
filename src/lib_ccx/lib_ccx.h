@@ -1,7 +1,7 @@
 #ifndef CCX_CCEXTRACTOR_H
 #define CCX_CCEXTRACTOR_H
 
-#define VERSION "1.00 - Comcast"
+#define VERSION "1.01 - Comcast"
 
 // Load common includes and constants for library usage
 #include "ccx_common_platform.h"
