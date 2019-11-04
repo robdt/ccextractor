@@ -42,6 +42,10 @@ static void DecodeCaption( ccx_mcc_caption_time, unsigned char*, int );
 static void processDtvccPacket( ccx_mcc_caption_time* );
 static void processLine21Packet( ccx_mcc_caption_time*, uint8, uint8 );
 
+unsigned char were_captions_found( void ) {
+    return captionTextFound;
+}
+
 boolean mcc_encode_cc_data( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_ctx, unsigned char *cc_data, int cc_count ) {
     ASSERT(cc_data);
     ASSERT(enc_ctx);

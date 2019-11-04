@@ -19,6 +19,8 @@ int fsync(int fd)
 }
 #endif
 
+extern unsigned char were_captions_found( void );
+
 // These are the default settings for plain transcripts. No times, no CC or caption mode, and no XDS.
 ccx_encoders_transcript_format ccx_encoders_default_transcript_settings =
 {
@@ -1424,7 +1426,11 @@ unsigned int get_font_encoded(struct encoder_ctx *ctx, unsigned char *buffer, in
 void switch_output_file(struct lib_ccx_ctx *ctx, struct encoder_ctx *enc_ctx, int track_id) {
 	if (enc_ctx->out->filename != NULL) { // Close and release the previous handle
 		free(enc_ctx->out->filename);
-		close(enc_ctx->out->fh);
+        close(enc_ctx->out->fh);
+		if( were_captions_found() == CCX_FALSE ) {
+            dbg_print( CCX_DMT_VERBOSE, "No Captions were found in asset.\n" );
+		    exit(10);
+		}
 	}
 	char *ext = get_file_extension(ctx->write_format);
 	char suffix[32];
