@@ -11,6 +11,8 @@
 #include "ccx_encoders_mcc.h"
 
 #define MORE_DEBUG          CCX_FALSE
+//#define PAD_WITH_FILL
+//#define DEBUG_CAPTION_TIMING
 
 static const char* MonthStr[12] = { "January", "February", "March", "April",
                                     "May", "June", "July", "August", "September",
@@ -37,6 +39,7 @@ static void write_string( int fh, char* string );
 static uint8 dtvccPacket[DTVCC_MAX_PACKET_LENGTH];
 static uint8 dtvccPacketLength;
 static boolean captionTextFound;
+static uint32 num_fill_frames = 0;
 
 static void DecodeCaption( ccx_mcc_caption_time, unsigned char*, int );
 static void processDtvccPacket( ccx_mcc_caption_time* );
@@ -283,6 +286,7 @@ static void add_fill_packet( struct encoder_ctx *enc_ctx, struct lib_cc_decode *
 
 static void ms_to_frame( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag, int cc_count ) {
     boolean time_synch = CCX_FALSE;
+    ccx_mcc_caption_time org_caption_time = *caption_time_ptr;
     int64 frame_size_ms = (1000 / current_fps) + 1;
 
     int64 actual_time_in_ms = (((caption_time_ptr->hour * 3600) + (caption_time_ptr->minute * 60) +
@@ -316,23 +320,54 @@ static void ms_to_frame( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_
             enc_ctx->next_caption_time.hour = enc_ctx->next_caption_time.hour + 1;
         }
 
-        if (enc_ctx->next_caption_time.frame >= frame_roll_over) {
-            enc_ctx->next_caption_time.frame = 0;
-            enc_ctx->next_caption_time.second = enc_ctx->next_caption_time.second + 1;
+        if( (dropframe_flag == CCX_TRUE) && (enc_ctx->next_caption_time.second == 0) &&
+            (enc_ctx->next_caption_time.frame == 0) && ((enc_ctx->next_caption_time.minute % 10) != 0) ){
+            enc_ctx->next_caption_time.frame = 2;
         }
 
         int64 frame_time_in_ms = (((caption_time_ptr->hour * 3600) + (caption_time_ptr->minute * 60) + (caption_time_ptr->second)) * 1000) +
                                  ((caption_time_ptr->frame * 100000) / norm_frame_rate);
 
+#ifdef DEBUG_CAPTION_TIMING
+        if( actual_time_in_ms > frame_time_in_ms ) {
+            int64 deltaInMs = actual_time_in_ms - frame_time_in_ms;
+            printf("%02d:%02d:%02d:%03d, %02d:%02d:%02d:%02d, %lld, %ld\n", org_caption_time.hour, org_caption_time.minute,
+                   org_caption_time.second, org_caption_time.millisecond, caption_time_ptr->hour, caption_time_ptr->minute,
+                   caption_time_ptr->second, caption_time_ptr->frame, deltaInMs, num_fill_frames);
+        } else if( actual_time_in_ms < frame_time_in_ms ) {
+            int64 deltaInMs = frame_time_in_ms - actual_time_in_ms;
+            printf("%02d:%02d:%02d:%03d, %02d:%02d:%02d:%02d, -%lld, %ld\n", org_caption_time.hour, org_caption_time.minute,
+                   org_caption_time.second, org_caption_time.millisecond, caption_time_ptr->hour, caption_time_ptr->minute,
+                   caption_time_ptr->second, caption_time_ptr->frame, deltaInMs, num_fill_frames);
+        }
+#endif
+
+#ifdef PAD_WITH_FILL
         int64 delta_in_ms = actual_time_in_ms - frame_time_in_ms;
 
         if( delta_in_ms > frame_size_ms ) {
             add_fill_packet( enc_ctx, dec_ctx, caption_time_ptr, cc_count );
+            num_fill_frames++;
         } else if( delta_in_ms < -frame_size_ms ) {
             LOG("Code Missing to remove Fill Frame! Time will be skewed: %lld", delta_in_ms);
             time_synch = CCX_TRUE;
         } else {
             time_synch = CCX_TRUE;
+        }
+#else
+        time_synch = CCX_TRUE;
+#endif
+
+        if( actual_time_in_ms > frame_time_in_ms ) {
+            int64 deltaInMs = actual_time_in_ms - frame_time_in_ms;
+            printf("%02d:%02d:%02d:%03d, %02d:%02d:%02d:%02d, %lld, %ld\n", org_caption_time.hour, org_caption_time.minute,
+                   org_caption_time.second, org_caption_time.millisecond, caption_time_ptr->hour, caption_time_ptr->minute,
+                   caption_time_ptr->second, caption_time_ptr->frame, deltaInMs, num_fill_frames);
+        } else if( actual_time_in_ms < frame_time_in_ms ) {
+            int64 deltaInMs = frame_time_in_ms - actual_time_in_ms;
+            printf("%02d:%02d:%02d:%03d, %02d:%02d:%02d:%02d, -%lld, %ld\n", org_caption_time.hour, org_caption_time.minute,
+                   org_caption_time.second, org_caption_time.millisecond, caption_time_ptr->hour, caption_time_ptr->minute,
+                   caption_time_ptr->second, caption_time_ptr->frame, deltaInMs, num_fill_frames);
         }
     }
 }  // ms_to_frame()
