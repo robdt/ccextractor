@@ -4,7 +4,7 @@
 
 #include "ccx_decoders_708.h"
 
-void params_dump(struct lib_ccx_ctx *ctx)
+void params_dump(struct lib_ccx_ctx *ctx, int force_dropframe)
 {
 	// Display parsed parameters
 	mprint ("Input: ");
@@ -206,6 +206,12 @@ void params_dump(struct lib_ccx_ctx *ctx)
 			mprint("Reduced color palette]\n");
 			break;
 	}
+
+	if( force_dropframe == CCX_TRUE ) {
+        mprint("[Force Dropframe: Yes]\n");
+    } else {
+        mprint("[Force Dropframe: No]\n");
+    }
 }
 
 #define Y_N(cond) ((cond) ? "Yes" : "No")

@@ -208,7 +208,7 @@ void anchor_hdcc(struct lib_cc_decode *ctx, int seq);
 void process_hdcc(struct encoder_ctx *enc_ctx, struct lib_cc_decode *ctx, struct cc_subtitle *sub);
 
 // params_dump.c
-void params_dump(struct lib_ccx_ctx *ctx);
+void params_dump(struct lib_ccx_ctx *ctx, int force_dropframe);
 void print_file_report(struct lib_ccx_ctx *ctx);
 
 // output.c

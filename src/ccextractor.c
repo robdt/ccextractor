@@ -94,7 +94,7 @@ int api_start(struct ccx_s_options api_options)
 
     int show_myth_banner = 0;
 
-    params_dump(ctx);
+    params_dump(ctx, api_options.enc_cfg.force_dropframe);
 
     // default teletext page
     if (tlt_config.page > 0) {

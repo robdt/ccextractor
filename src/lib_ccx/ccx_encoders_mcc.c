@@ -21,15 +21,11 @@ static const char* MonthStr[12] = { "January", "February", "March", "April",
 static const char* DayOfWeekStr[7] = { "Sunday", "Monday", "Tuesday", "Wednesday",
                                        "Thursday", "Friday", "Saturday" };
 
-#if 0
-static const uint32 framerate_translation[16] = { 0, 2397, 2400, 2500, 2997, 3000, 5000, 5994, 6000, 0, 0, 0, 0, 0 };
-#endif
-
 static void debug_log( char* file, int line, ... );
 static ccx_mcc_caption_time convert_to_caption_time( LLONG mstime );
 static void generate_mcc_header( int fh, int fr_code, int dropframe_flag );
 static void add_fill_packet( struct encoder_ctx *ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int cc_count );
-static void ms_to_frame( struct encoder_ctx *ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag, int cc_count );
+static void ms_to_frame( struct encoder_ctx *ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag, unsigned char *cc_data, int cc_count );
 static uint8* add_boilerplate( struct encoder_ctx *ctx, unsigned char *cc_data, int cc_count, int fr_code );
 static uint16 count_compressed_chars( uint8* data_ptr, uint16 num_elements );
 static void compress_data( uint8* data_ptr, uint16 num_elements, uint8* out_data_ptr );
@@ -40,6 +36,10 @@ static uint8 dtvccPacket[DTVCC_MAX_PACKET_LENGTH];
 static uint8 dtvccPacketLength;
 static boolean captionTextFound;
 static uint32 num_fill_frames = 0;
+static uint32 totalSkew;
+static uint8 framesPerSec[60];
+static boolean fullSecondFound;
+static ccx_mcc_caption_time last_caption_time;
 
 static void DecodeCaption( ccx_mcc_caption_time, unsigned char*, int );
 static void processDtvccPacket( ccx_mcc_caption_time* );
@@ -65,6 +65,11 @@ boolean mcc_encode_cc_data( struct encoder_ctx *enc_ctx, struct lib_cc_decode *d
         enc_ctx->next_caption_time.hour = caption_time.hour;
         enc_ctx->next_caption_time.minute = caption_time.minute;
         enc_ctx->next_caption_time.second = caption_time.second;
+
+        last_caption_time.hour = caption_time.hour;
+        last_caption_time.minute = caption_time.minute;
+        last_caption_time.second = caption_time.second;
+
         uint32 norm_frame_rate = (uint32)(current_fps * 100);
         uint64 frame_number = caption_time.millisecond * norm_frame_rate;
         frame_number = frame_number / 100000;
@@ -78,6 +83,9 @@ boolean mcc_encode_cc_data( struct encoder_ctx *enc_ctx, struct lib_cc_decode *d
             caption_time.hour, caption_time.minute, caption_time.second, caption_time.millisecond);
         dtvccPacketLength = 0;
         captionTextFound = CCX_FALSE;
+        fullSecondFound = CCX_FALSE;
+        totalSkew = 0;
+        for( int loop = 0; loop < 60; loop++ ) framesPerSec[loop] = 0;
     }
 
     if( captionTextFound == CCX_FALSE ) {
@@ -98,7 +106,7 @@ boolean mcc_encode_cc_data( struct encoder_ctx *enc_ctx, struct lib_cc_decode *d
     uint8* w_boilerplate_buffer = add_boilerplate(enc_ctx, cc_data, cc_count, dec_ctx->current_frame_rate);
     uint16 w_boilerplate_buff_size = ((cc_count * 3) + 16);
 
-    ms_to_frame(enc_ctx, dec_ctx, &caption_time, dec_ctx->current_frame_rate, enc_ctx->force_dropframe, cc_count);
+    ms_to_frame(enc_ctx, dec_ctx, &caption_time, dec_ctx->current_frame_rate, enc_ctx->force_dropframe, cc_data, cc_count);
 
     uint16 num_chars_needed = count_compressed_chars(w_boilerplate_buffer, w_boilerplate_buff_size);
 
@@ -129,6 +137,31 @@ boolean mcc_encode_cc_data( struct encoder_ctx *enc_ctx, struct lib_cc_decode *d
 
 }  // mcc_encode_cc_data()
 
+void print_final_mcc_data( void ) {
+    char scratchBuffer[256];
+    scratchBuffer[0] = '\0';
+
+    for( int loop = 0; loop < 60; loop++ ) {
+        if( framesPerSec[loop] == 0 ) {
+            break;
+        }
+        sprintf(&scratchBuffer[strlen(scratchBuffer)], "%d  ", framesPerSec[loop]);
+        if(loop == 29 ) {
+            sprintf(&scratchBuffer[strlen(scratchBuffer)], "\n");
+            printf("%s", scratchBuffer);
+            scratchBuffer[0] = '\0';
+        }
+    }
+    if( scratchBuffer[0] != '\0' ) {
+        printf("%s", scratchBuffer);
+    }
+
+    if( totalSkew != 0 ) {
+        printf("\n\nAdding %ld frames to correct skew from missing frames in source\n", totalSkew);
+    }
+
+} // print_final_mcc_data()
+
 static void generate_mcc_header( int fh, int fr_code, int dropframe_flag ) {
     uuid_t binuuid;
     char uuid_str[50];
@@ -149,7 +182,6 @@ static void generate_mcc_header( int fh, int fr_code, int dropframe_flag ) {
     sprintf(date_str, "Creation Date=%s, %s %d, %d\n", DayOfWeekStr[tm.tm_wday], MonthStr[tm.tm_mon], tm.tm_mday, tm.tm_year + 1900);
     sprintf(time_str, "Creation Time=%d:%02d:%02d\n", tm.tm_hour, tm.tm_min, tm.tm_sec);
 
-#if 1
     if((current_fps > 22) && (current_fps < 25)) {
         sprintf(tcr_str, "Time Code Rate=24\n\n");
     } else if((current_fps > 24) && (current_fps < 29)) {
@@ -171,39 +203,6 @@ static void generate_mcc_header( int fh, int fr_code, int dropframe_flag ) {
     } else {
         LOG("ERROR: Invalid Framerate Code: %f", current_fps);
     }
-#else
-    switch( fr_code ) {
-        case 1:
-        case 2:
-            sprintf(tcr_str, "Time Code Rate=24\n\n");
-            break;
-        case 3:
-            sprintf(tcr_str, "Time Code Rate=25\n\n");
-            break;
-        case 4:
-        case 5:
-            if( dropframe_flag == CCX_TRUE ) {
-                sprintf(tcr_str, "Time Code Rate=30DF\n\n");
-            } else {
-                sprintf(tcr_str, "Time Code Rate=30\n\n");
-            }
-            break;
-        case 6:
-            sprintf(tcr_str, "Time Code Rate=50\n\n");
-            break;
-        case 7:
-        case 8:
-            if( dropframe_flag == CCX_TRUE ) {
-                sprintf(tcr_str, "Time Code Rate=60DF\n\n");
-            } else {
-                sprintf(tcr_str, "Time Code Rate=60\n\n");
-            }
-            break;
-        default:
-            LOG("ERROR: Invalid Framerate Code: %d", fr_code);
-            break;
-    }
-#endif
 
     write_string(fh, "File Format=MacCaption_MCC V1.0\n\n");
     write_string(fh, "///////////////////////////////////////////////////////////////////////////////////\n");
@@ -284,10 +283,95 @@ static void add_fill_packet( struct encoder_ctx *enc_ctx, struct lib_cc_decode *
     free(compressed_data_buffer);
 } // add_fill_packet()
 
-static void ms_to_frame( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag, int cc_count ) {
+static uint8 handleSkew( ccx_mcc_caption_time* inCaptionTimePtr ) {
+    uint8 framerateLow = 0;
+    uint8 framerateHigh = 0;
+    uint8 retval = 0;
+
+    if((current_fps > 22) && (current_fps < 25)) {
+        framerateHigh = 24;
+        framerateLow = 23;
+    } else if((current_fps > 24) && (current_fps < 26)) {
+        framerateHigh = 25;
+        framerateLow = 25;
+    } else if((current_fps > 29) && (current_fps < 31)) {
+        framerateHigh = 30;
+        framerateLow = 29;
+    } else if((current_fps > 58) && (current_fps < 61)) {
+        framerateHigh = 60;
+        framerateLow = 59;
+    } else {
+        LOG("ERROR: Invalid Framerate Code: %f", current_fps);
+    }
+
+    if( (last_caption_time.minute == inCaptionTimePtr->minute) && (last_caption_time.second == inCaptionTimePtr->second) ) {
+        framesPerSec[inCaptionTimePtr->second]++;
+    } else if( last_caption_time.minute != inCaptionTimePtr->minute ) {
+        uint32 minuteSkew = 0;
+        uint32 minuteFrames = 0;
+        char scratchBuffer[256];
+        scratchBuffer[0] = '\0';
+        for( int loop = 0; loop < 60; loop++ ) {
+            if( (framesPerSec[loop] != framerateLow) && (framesPerSec[loop] != framerateHigh) ) {
+                sprintf(&scratchBuffer[strlen(scratchBuffer)], "%02d* ", framesPerSec[loop]);
+                ASSERT(framesPerSec[loop] > framerateHigh);
+                minuteSkew = minuteSkew + (framerateHigh - framesPerSec[loop]);
+            } else if( framesPerSec[loop] == framerateLow ) {
+                sprintf(&scratchBuffer[strlen(scratchBuffer)], "%02d! ", framesPerSec[loop]);
+            } else {
+                sprintf(&scratchBuffer[strlen(scratchBuffer)], "%02d  ", framesPerSec[loop]);
+            }
+            minuteFrames = minuteFrames + framesPerSec[loop];
+            framesPerSec[loop] = 0;
+            if(loop == 29 ) {
+                sprintf(&scratchBuffer[strlen(scratchBuffer)], "\n");
+                printf("%s", scratchBuffer);
+                scratchBuffer[0] = '\0';
+            }
+        }
+        if( minuteSkew == 0 ) {
+            sprintf(&scratchBuffer[strlen(scratchBuffer)], "%d:%02d -> %d:%02d = %ld\n",
+                    last_caption_time.hour, last_caption_time.minute, inCaptionTimePtr->hour,
+                    inCaptionTimePtr->minute, minuteFrames);
+        } else {
+            sprintf(&scratchBuffer[strlen(scratchBuffer)], "%d:%02d -> %d:%02d = %ld  --- Skew %ld\n",
+                    last_caption_time.hour, last_caption_time.minute, inCaptionTimePtr->hour,
+                    inCaptionTimePtr->minute, minuteFrames, minuteSkew);
+        }
+        printf("%s", scratchBuffer);
+        totalSkew = totalSkew + minuteSkew;
+        framesPerSec[inCaptionTimePtr->second]++;
+    } else if( last_caption_time.second != inCaptionTimePtr->second ) {
+        framesPerSec[inCaptionTimePtr->second]++;
+        if( (framesPerSec[last_caption_time.second] == framerateLow) || (framesPerSec[last_caption_time.second] == framerateHigh) ) {
+            fullSecondFound = CCX_TRUE;
+        } else if( fullSecondFound == CCX_TRUE ) {
+            ASSERT(framesPerSec[last_caption_time.second] < framerateHigh);
+            retval = framerateHigh - framesPerSec[last_caption_time.second];
+            LOG("Adding %d frames to correct skew from missing frames at: %02d:%02d:%02d.%03d", retval,
+                inCaptionTimePtr->hour, inCaptionTimePtr->minute, inCaptionTimePtr->second, inCaptionTimePtr->millisecond);
+        } else {
+            LOG("Missing %d frames in the front of the asset: %02d:%02d:%02d.%03d Ignoring.",
+                (framerateHigh - framesPerSec[last_caption_time.second]), inCaptionTimePtr->hour,
+                inCaptionTimePtr->minute, inCaptionTimePtr->second, inCaptionTimePtr->millisecond);
+        }
+    } else {
+        ASSERT(0);
+    }
+
+    last_caption_time.hour = inCaptionTimePtr->hour;
+    last_caption_time.minute = inCaptionTimePtr->minute;
+    last_caption_time.second = inCaptionTimePtr->second;
+
+    return retval;
+} // handleSkew()
+
+
+static void ms_to_frame( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_ctx, ccx_mcc_caption_time* caption_time_ptr, int fr_code, int dropframe_flag, unsigned char *cc_data, int cc_count ) {
     boolean time_synch = CCX_FALSE;
     ccx_mcc_caption_time org_caption_time = *caption_time_ptr;
     int64 frame_size_ms = (1000 / current_fps) + 1;
+    uint8 skewFillPackets = 0;
 
     int64 actual_time_in_ms = (((caption_time_ptr->hour * 3600) + (caption_time_ptr->minute * 60) +
                                 (caption_time_ptr->second)) * 1000) + caption_time_ptr->millisecond;
@@ -340,6 +424,7 @@ static void ms_to_frame( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_
                    org_caption_time.second, org_caption_time.millisecond, caption_time_ptr->hour, caption_time_ptr->minute,
                    caption_time_ptr->second, caption_time_ptr->frame, deltaInMs, num_fill_frames);
         }
+
 #endif
 
 #ifdef PAD_WITH_FILL
@@ -355,20 +440,37 @@ static void ms_to_frame( struct encoder_ctx *enc_ctx, struct lib_cc_decode *dec_
             time_synch = CCX_TRUE;
         }
 #else
-        time_synch = CCX_TRUE;
-#endif
+        if( skewFillPackets == 0 ) {
+#if 0
+            printf("%02d:%02d:%02d:%03d | %02d:%02d:%02d:%02d - ", org_caption_time.hour, org_caption_time.minute,
+                   org_caption_time.second, org_caption_time.millisecond, caption_time_ptr->hour, caption_time_ptr->minute,
+                   caption_time_ptr->second, caption_time_ptr->frame);
+            for( int loop = 0; loop < cc_count; loop++ ) {
+                uint8 msn, lsn;
+                msn = (cc_data[loop] & 0xF0);
+                msn = msn >> 4;
+                if( msn < 0x0A ) msn = msn + '0';
+                else msn = (msn - 0x0A) + 'A';
 
-        if( actual_time_in_ms > frame_time_in_ms ) {
-            int64 deltaInMs = actual_time_in_ms - frame_time_in_ms;
-            printf("%02d:%02d:%02d:%03d, %02d:%02d:%02d:%02d, %lld, %ld\n", org_caption_time.hour, org_caption_time.minute,
-                   org_caption_time.second, org_caption_time.millisecond, caption_time_ptr->hour, caption_time_ptr->minute,
-                   caption_time_ptr->second, caption_time_ptr->frame, deltaInMs, num_fill_frames);
-        } else if( actual_time_in_ms < frame_time_in_ms ) {
-            int64 deltaInMs = frame_time_in_ms - actual_time_in_ms;
-            printf("%02d:%02d:%02d:%03d, %02d:%02d:%02d:%02d, -%lld, %ld\n", org_caption_time.hour, org_caption_time.minute,
-                   org_caption_time.second, org_caption_time.millisecond, caption_time_ptr->hour, caption_time_ptr->minute,
-                   caption_time_ptr->second, caption_time_ptr->frame, deltaInMs, num_fill_frames);
+                lsn = (cc_data[loop] & 0x0F);
+                if( lsn < 0x0A ) lsn = lsn + '0';
+                else lsn = (lsn - 0x0A) + 'A';
+                printf("%c%c ", msn, lsn);
+            }
+            printf("\n");
+#endif
+            skewFillPackets = handleSkew(&org_caption_time);
+            if( skewFillPackets == 0 ) {
+                time_synch = CCX_TRUE;
+            }
+        } else {
+            add_fill_packet( enc_ctx, dec_ctx, caption_time_ptr, cc_count );
+            skewFillPackets = skewFillPackets - 1;
+            if( skewFillPackets == 0 ) {
+                time_synch = CCX_TRUE;
+            }
         }
+#endif
     }
 }  // ms_to_frame()
 
@@ -380,7 +482,6 @@ static uint8* add_boilerplate( struct encoder_ctx *ctx, unsigned char *cc_data, 
     uint8* buff_ptr = malloc(data_size + 16);
     uint8 cdp_frame_rate = CDP_FRAME_RATE_FORBIDDEN;
 
-#if 1
     if((current_fps > 22) && (current_fps < 24)) {
         cdp_frame_rate = CDP_FRAME_RATE_23_976;
     } else if((current_fps > 23) && (current_fps < 25)) {
@@ -400,37 +501,7 @@ static uint8* add_boilerplate( struct encoder_ctx *ctx, unsigned char *cc_data, 
     } else {
         LOG("ERROR: Invalid Framerate Code: %f", current_fps);
     }
-#else
-    switch( fr_code ) {
-        case 1:
-            cdp_frame_rate = CDP_FRAME_RATE_23_976;
-            break;
-        case 2:
-            cdp_frame_rate = CDP_FRAME_RATE_24;
-            break;
-        case 3:
-            cdp_frame_rate = CDP_FRAME_RATE_25;
-            break;
-        case 4:
-            cdp_frame_rate = CDP_FRAME_RATE_29_97;
-            break;
-        case 5:
-            cdp_frame_rate = CDP_FRAME_RATE_30;
-            break;
-        case 6:
-            cdp_frame_rate = CDP_FRAME_RATE_50;
-            break;
-        case 7:
-            cdp_frame_rate = CDP_FRAME_RATE_59_94;
-            break;
-        case 8:
-            cdp_frame_rate = CDP_FRAME_RATE_60;
-            break;
-        default:
-            LOG("ERROR: Unknown Framerate: %d", fr_code);
-            break;
-    }
-#endif
+
     //   This function encodes the Ancillary Data (ANC) Packet, which wraps the Caption
     //   Distribution Packet (CDP), including the Closed Captioning Data (ccdata_section) as
     //   described in the CEA-708 Spec. Below is the list of specs that were leveraged for

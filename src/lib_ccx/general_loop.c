@@ -18,6 +18,7 @@
 #include "dvd_subtitle_decoder.h"
 #include "ccx_demuxer_mxf.h"
 
+extern void print_final_mcc_data(void);
 
 int end_of_file=0; // End of file?
 
@@ -1172,6 +1173,8 @@ int general_loop(struct lib_ccx_ctx *ctx)
 		// Flush remaining HD captions
 		if (dec_ctx->has_ccdata_buffered)
 					process_hdcc(enc_ctx, dec_ctx, &dec_ctx->dec_sub);
+
+                print_final_mcc_data();
 
 		mprint ("\nNumber of NAL_type_7: %ld\n",dec_ctx->avc_ctx->num_nal_unit_type_7);
 		mprint ("Number of VCL_HRD: %ld\n",dec_ctx->avc_ctx->num_vcl_hrd);
