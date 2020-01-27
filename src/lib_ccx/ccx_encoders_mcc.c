@@ -314,7 +314,7 @@ static uint8 handleSkew( ccx_mcc_caption_time* inCaptionTimePtr ) {
         for( int loop = 0; loop < 60; loop++ ) {
             if( (framesPerSec[loop] != framerateLow) && (framesPerSec[loop] != framerateHigh) ) {
                 sprintf(&scratchBuffer[strlen(scratchBuffer)], "%02d* ", framesPerSec[loop]);
-                ASSERT(framesPerSec[loop] > framerateHigh);
+                ASSERT(framesPerSec[loop] < framerateHigh);
                 minuteSkew = minuteSkew + (framerateHigh - framesPerSec[loop]);
             } else if( framesPerSec[loop] == framerateLow ) {
                 sprintf(&scratchBuffer[strlen(scratchBuffer)], "%02d! ", framesPerSec[loop]);
